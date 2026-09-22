@@ -1,10 +1,18 @@
 ---
 name: run
-description: 执行测试用例（guided-run）。开头选环境（local/test），逐条用例：脚本路由造数（.sql→usql、其他脚本→本地 runner 或 k8s pod）→ playwright-cli 按业务步骤驱动有头浏览器 → 三层断言（UI/网络/DB，DB 可 usql 或应用内脚本）→ 清理 → 产出 result.yaml。用户说"跑用例"、"执行测试"、"继续测试"时使用。
+description: 融合资深 QA 架构师视角执行测试用例（guided-run）。默认采用 dev (test) 环境，数据先行与多画像造数健全性门禁，严格三层断言穿透业务逻辑与数值计算，绝对严禁将空数据/暂无数据/--判定为 PASS。用户说"跑用例"、"执行测试"、"继续测试"、"回归测试"时使用。
 allowed-tools: Bash(playwright-cli:*), Bash(usql:*), Bash(ssh:*), Bash(cat:*), Bash(mkdir:*), Bash(date:*), Read, Grep, Glob, Write, Edit, AskUserQuestion, TaskCreate, TaskUpdate, TaskList, Agent
 ---
 
-# run：guided-run 执行用例
+# run：guided-run 执行用例（资深 QA 严格执行标准）
+
+## 资深 QA 执行信条（Senior QA Execution Standards）
+你作为拥有 10+ 年高可用系统测试实战经验的**资深 QA 架构师与执行官**，在用例执行与断言阶段必须严格把控以下红线：
+1. **默认环境设置 dev**：测试执行**默认首选 dev（即 config 中的 test/dev）测试联调环境**，避免本地 local 未起服务导致的无谓阻塞；
+2. **数据先行与健全性门禁**：必须通过 `data.setup` 确保数据真实落库，造数失败立即中止并标 blocked，严禁无数据空跑；
+3. **【反空数据假通过铁律】（Anti-Empty Pass Guard，绝对红线）**：
+   - 页面显示"暂无数据"、表格行数为 0、字段显示 `--`/`NaN`/`null`/`undefined`、或未匹配到期望的计算数值，**必须无条件判定为 FAILED，绝对严禁视为 PASSED**！
+   - 断言必须穿透验证到具体业务逻辑、数值公式与状态流转，坚决杜绝"无报错即 Pass"的欺骗性测试。
 
 ## 硬约束（违反即执行错误）
 
@@ -20,7 +28,10 @@ allowed-tools: Bash(playwright-cli:*), Bash(usql:*), Bash(ssh:*), Bash(cat:*), B
 > 路径口径：本 skill 全文的 `cases/`、`evidence/` 均指被测项目根下的 `.qa-powers/cases/`、`.qa-powers/evidence/`；凡写「绝对路径」处一律为 `$PWD/.qa-powers/evidence/...`（用 `pwd` 取被测项目根拼接）。
 
 1. 读 `.qa-powers/config.yaml`；**版本核对**：`bash "$CLAUDE_PLUGIN_ROOT/scripts/version-check.sh" .qa-powers/config.yaml` 有输出则把警告转告用户（中文），流程继续（仅提示、不阻断）
-2. **选环境（硬性步骤）**：读 `active_env`，AskUserQuestion 确认本次跑哪个 `envs` 键（local/test）或切到另一个；config 只配了一个环境时直接用它，不再问。确定 `ENV` 后，下文所有 base_url / 登录态 / DB URL / 脚本后端一律从 `envs.<ENV>` 取。记入 commands.log 与 run 级 result.yaml（`env: <ENV>`）
+2. **选环境（默认首选 dev/test 环境）**：
+   - **默认环境设置 dev**：若 config 包含 `test` 或 `dev`，**默认且优先采用 test (dev) 测试联调环境**（如 `active_env: test`）；
+   - 若用户未在指令中显式指定其他环境，或者在提问确认时，**推荐并默认选用 dev/test**，直接回车即用，杜绝本地 local 未起服务导致的无谓阻塞；
+   - 仅当用户明确要求"在本地跑"或 config 仅有 local 时才使用 local。确定 `ENV` 后，下文所有 base_url / 登录态 / DB URL / 脚本后端一律从 `envs.<ENV>` 取。记入 commands.log 与 run 级 result.yaml（`env: <ENV>`）。
 3. `run_id=$(date +%Y-%m-%d-%H%M%S)`；`mkdir -p .qa-powers/evidence/$run_id`。**断点续跑**：若最新 run（evidence 目录名按 `YYYY-MM-DD-HHMMSS` 字典序取最大，即最新）下存在未完成 case（case 目录无 result.yaml），先问用户「继续该 run（复用其 run_id 与 evidence 目录，跳过已有终态 result.yaml 的 case，从第一个未完成的接着跑）还是新开 run」
 4. **建立路由映射**：
    - 先查 `cases/<模块>/meta.yaml` 是否已沉淀 `routes:`（「页面名 → 完整 URL」映射，见下）→ 有则直接复用，不再推导
@@ -52,32 +63,71 @@ allowed-tools: Bash(playwright-cli:*), Bash(usql:*), Bash(ssh:*), Bash(cat:*), B
 
 规则：
 
-- **只读直接跑、写数据必须确认（任何环境都适用）**：纯查询——usql 单条 `SELECT/SHOW/DESC/DESCRIBE/PRAGMA(查询型)/EXPLAIN(不含 ANALYZE)`，或脚本/runner 内只有只读逻辑（查询/puts）——直接执行，**不需 AskUserQuestion**；usql 只读内联查询已由 PreToolUse hook 自动放行、免确认。一旦涉及写（`INSERT/UPDATE/DELETE/CREATE/ALTER/DROP/TRUNCATE/GRANT`、`PRAGMA name=值`、`EXPLAIN ANALYZE`、或脚本含写入逻辑/副作用），执行前必须 AskUserQuestion 确认（test/k8s 环境同 k8s skill：动哪些表/数据、量级、是否可回滚）
+- **读写分级与自动化预授权机制（任何环境都适用）**：
+  - **纯只读查询**：usql 单条 `SELECT/SHOW/DESC/DESCRIBE/PRAGMA(查询型)/EXPLAIN(不含 ANALYZE)`，或脚本/runner 内只有只读逻辑（查询/puts）——直接执行，**不需 AskUserQuestion**。
+  - **用例自愈与清理脚本预授权放行（工业化执行）**：当前用例 frontmatter `data.setup` / `data.cleanup` 声明的伴生脚本、或用户初始指令已声明“预授权造数与清理/免确认”时，执行器自动直接放行执行，**禁止调用 AskUserQuestion 中断自动化流水线**。
+  - **非受控/手动高危写操作**：用户未预授权且非用例受控脚本的写操作（如大表 TRUNCATE/DROP/ALTER），执行前必须 AskUserQuestion 确认（动哪些表/数据、量级、是否可回滚）。
 - 未配 script 段 / 无后端仓库 → 只允许 `.sql`（usql）；执行中遇到脚本文件停下，提示配置 runner 或改用 `.sql`
 - **多库**：`envs.<ENV>.db` 配了 `dbs: { 别名: { url, desc } }` 时，usql 目标库按 case frontmatter `dbs:` 声明的别名取 `dbs.<别名>.url`；用哪个库先看该别名的 `desc` 说明。用例 SQL 引用了别名而未声明 → 停下问用户或用 `db.url` 默认库
 - local 环境：runner 与 workdir（= repos.backend.path）取 config，**禁止猜**；runner 启动慢**不等于卡死**，不要提前杀掉重试
 - local 首次执行 runner 命令会被权限拦截 → 授权放行（或把 `Bash(cd:*<runner>:*)` 写入 settings 白名单）
 
+## 0.6 智能精准回归选择器（Smart Regression Selector）
+
+**触发机制**：当用户指令提及「回归测试」、「精准回归」、「验证改动」、「测一下修改」，或未显式强调「全量跑」时，**默认启用精准回归选择器**；仅当用户明确要求「全量测试 / 跑全部用例」时才执行全量用例。
+
+**影响分析与过滤算法（Impact Analysis Algorithm）**：
+1. **提取变更集（Git Diff）**：
+   - 对 config.yaml 中涉及的仓库（frontend / backend），执行只读命令：
+     `git -C <repo_path> diff <base>...<head> --name-only`
+   - 提取本次变动的文件路径列表 `changed_files`。
+2. **改动点与用例逆向匹配（Reverse Mapping）**：
+   - 读取目标用例目录下的 `meta.yaml`：
+     - 检查 `changes` 列表中每个改动点 `D_i` 的 `ref`（如 `src/view/pressing_order/detail.vue`、`app/models/pressing_order.rb`）；
+     - 若 `changed_files` 中包含该 `ref`，则改动点 `D_i` 被判定为 `impacted_changes`。
+   - 遍历各用例 `case-*.md` 的 frontmatter：
+     - **直接命中（Direct Hit）**：若用例的 `covers` 包含任何一个 `impacted_changes`，该用例加入待执行队列；
+     - **依赖扩展（Dependency Hit）**：若入利用例存在 `depends_on: [case-XX]`，其前置依赖用例自动递归纳入队列；
+     - **无关用例（Unaffected）**：未命中的用例直接判定为跳过。
+3. **零开销跳过（Zero-cost Skip）**：
+   - 对判定为跳过的用例，**不拉起浏览器、不执行任何 setup 脚本、不消耗任何执行时间**；
+   - 在其证据目录下直接写入 `result.yaml`，标记为 `status: skipped, reason: "代码改动未波及该用例 (精准回归过滤)"`；
+4. **效能度量看板（Efficiency Scoreboard）**：
+   - 执行前在终端输出筛选结果：
+     `🎯 【精准回归用例挑选】总用例: M 条 | 精准命中: N 条 (case-XX) | 智能跳过: M-N 条`
+     `⚡ 效能提升：预计节约执行时间约 (M-N)*1.5 分钟。`
+
 ## 1. 逐条 case 执行（顺序模式）
 
-对每条 case，在其证据目录 `evidence/$run_id/<case-id>/` 下工作（先 mkdir，并建 screenshots/）。断点续跑时，case 目录已有终态 result.yaml 的直接跳过，在 commands.log 注明 resumed-skip。
+对每条 case，在其证据目录 `evidence/$run_id/<case-id>/` 下工作（先 mkdir，并建 screenshots/）。断点续跑或精准回归时，case 目录已有终态 result.yaml（或已被 §0.6 标记为 skipped）的直接跳过，在 commands.log 注明 resumed-skip / smart-skip。
 
 **多账号切换**：case frontmatter 声明了 `account:` 且与当前已加载账号不同时，先切换：`playwright-cli state-load <envs.<ENV>.auth.accounts.<该账号>.state_file>` → `playwright-cli goto <envs.<ENV>.base_url>` → snapshot 确认登录身份已切换（页面上能看到当前用户标识时核对）。state_file 不存在或加载后未登录 → **自动登录**（先 snapshot 识别登录页类型）：
 - **普通登录页**：定位登录入口 → 用 config 该账号的 username/password fill 提交
 - **SSO 登录页**（识别：URL 跳转到独立认证域名——URL 含 auth/oauth/sso 且非业务域名，页面是统一认证入口）：填 username/password 提交；页面出现额外多因子字段（令牌/验证码等）且非必填（有「忘记/暂不」类跳过入口）时留空跳过；登录成功按 redirect/return_to 参数自动回跳业务页。具体域名与页面文案以实际系统为准，勿套用固定文案
 - 登录成功后 `state-save <该账号 state_file>` 沉淀 → 回到目标页继续（fill 密码的命令记入 commands.log 时密码值脱敏为 `***`）。自动登录仍失败 → 该 case 标 blocked（reason 注明账号与原因）。切换/登录动作记入 commands.log。
 
-### a. 造数（有 data.setup 时）
+### a. 造数与上下文桥接（有 data.setup 时）
+
+**资深 QA 造数健全性门禁（Data Sanity Gate）**：
+- 执行 setup 脚本后，不仅检查命令返回值，还必须确认生成了有效的业务实体（输出 `FIXTURE_JSON` 或查库确认存在记录）；
+- **造数失败阻断保护**：若造数抛出异常、SQL 报错或返回空，**直接将该用例判定为 blocked（原因注记"造数失败，测试数据未就绪"），立即中止该用例后续浏览器操作**，严禁在无数据状态下空跑浏览器甚至给出虚假 Pass！
 
 按 §0.5 路由执行 setup 文件：
 
 ```bash
 usql "<envs.<ENV>.db.url>" -f <setup.sql 路径>      # .sql 载体；多库时目标库取 db.dbs.<别名>.url（别名见 case frontmatter dbs:）
 # 或
-cd <repos.backend.path> && <runner> <setup 脚本路径>   # 脚本文件（local）
+cd <repos.backend.path> && <runner> <setup 脚本路径>   # 脚本文件（local，或 test 环境通过 stdin 管道进 pod）
 ```
 
-造数产生的 ID（如订单号/商品 ID）记入 commands.log 注释行。INSERT 报 NOT NULL/约束错误时，先一次查全该表约束再改脚本，不要逐列试错（按 DB 方言选，SQLite 没有 information_schema）：
+**工业化造数与上下文桥接契约（Fixture Context Bridge）**：
+1. **结构化上下文导出**：setup 脚本执行成功后，通过向标准输出打印 `FIXTURE_JSON:{"id": 123, "order_no": "ORD-1234", "reused": false, "table": "orders"}`，或直接落盘至证据目录 `evidence/$run_id/<case-id>/fixture.json`。
+2. **上下文变量捕获与步骤注入**：执行器自动解析捕获该 JSON 中的变量键值对存入用例运行时上下文（如 `context.id = 123`）。后续步骤中的 URL、输入值（如 `/#/order/detail/:id`、`{{id}}`、`{{order_no}}`）在执行操作时**自动精准替换为真实 ID**，彻底消除人工手动拼凑 URL 的不确定性。
+3. **自动生成回滚清单（Auto Rollback Manifest）**：
+   - 若 `reused: false`（全新创建测试数据），执行器自动在证据目录生成 `rollback_manifest.json`（记录新建实体的表名与 ID 列表），作为后置一键清理的可靠凭据。
+   - 若 `reused: true`（复用既有存量数据），清单标记为复用模式，防止后置清理阶段误删环境共享基线数据。
+
+造数产生的 ID 自动记入 commands.log 注释行。INSERT 报 NOT NULL/约束错误时，先一次查全该表约束再改脚本，不要逐列试错（按 DB 方言选，SQLite 没有 information_schema）：
 
 ```sql
 -- PostgreSQL / MySQL
@@ -101,7 +151,18 @@ PRAGMA table_info('<表名>');
 5. 关键节点（提交前后、断言处）`playwright-cli screenshot --filename <$PWD/.qa-powers/evidence/$run_id/<case-id>/screenshots/step-NN.png 的绝对路径>`——**一律用绝对路径**：会话 cwd 常在被测仓库根，相对路径会把截图写进仓库根污染工作区；不带 `--filename` 时 playwright-cli 用默认命名 `qap-<session>-stepNN.png` 也落在 cwd。收尾核对 screenshots/ 目录截图齐全、被测仓库根无残留 png（误落根目录的移到证据目录或删除）
 6. 出现意外状态（弹窗/报错）→ snapshot 判断：可关闭的关闭后继续；疑似 bug → 截图取证、在日志标注、按用例预期判定 FAIL，继续下一条步骤或下一 case
 
-### c. 断言（预期环节）
+### c. 断言（预期环节与非空逻辑穿透）
+
+**【资深 QA 反假阳性与非空判定铁律】（Anti-Empty Pass Guard，绝对红线）**：
+任何断言必须穿透到真实业务数据与计算逻辑，**凡遇到以下任意一种情况，必须立即判定为 failed，绝对严禁判定为 passed**：
+1. **表格列表无数据**：页面显示"暂无数据"、"暂无记录"、"No Data"、"共 0 条"；
+2. **字段空值与异常占位**：预期的业务指标、得分、金额、计算结果显示为 `--`、`NaN`、`null`、`undefined`、空字符串 `""`；
+3. **非预期的零值**：在非压门槛（非 0 分）场景下，由于逻辑漏算或未取到数而显示为 `0` 或 `0.0`；
+4. **接口响应体为空**：网络捕获的 API 返回列表为空数组 `[]`，或核心数据对象为空 `{}`；
+5. **虚假无害判定（Fake Pass）**：仅断言了"页面没有报错/无红字"、"表格外框存在"、"接口返回 200"，而没有提取到真实业务数值并比对。
+
+若发生上述空数据现象，在 result.yaml 中必须如实填入：
+`actual: "空数据未命中: 页面显示暂无数据/字段为--/未验证到业务逻辑, 预期: <expected>"`，并在 failure 中记录截图与失败步骤。
 
 三层验证，可信度递增，**结论以下层为准**（快照会骗人：异步未返回、缓存都可能让快照失真）：
 
@@ -125,11 +186,35 @@ cd <repos.backend.path> && <runner> -e 'puts Order.find_by(...).attributes'
 - **量化预期先取真值再比对**：排序/Top-N/计数/默认值类预期，先按实现逻辑（改动代码中的查询/排序）在库里跑一遍得出期望值，再与页面实际比对——不以页面展示反推预期。查库所得与用例声明的需求口径冲突（如实现按 updated_at 排序、需求要求 created_at）时，**以用例预期为准判 FAIL 并备注「需求偏差」**，不拿实现现状当预期
 - **校验类用例「意外成功」**：预期"被拦截/报错"却通过了 → 先查 DB 确认是否真的写入。未写入则按断言正常判定；已写入即误创建：立即按记录 ID 清理，在 result.yaml 的 cleanup 段如实注明「执行中误创建并已清理」，然后复测该用例
 
-### d. 清理（有 data.cleanup 时）
+### d. 清理与现场保留策略（支持可配置开关与人工确认机制）
 
-按 §0.5 路由执行 cleanup 文件。
+**清理策略开关（取 config.cleanup.mode，默认 manual）**：
 
-cleanup 失败：在 case 级 result.yaml 的 cleanup 段记录，**不改变用例状态**，最后向用户告警残留数据。
+| 清理模式 (cleanup.mode) | 执行行为 | 适用场景 |
+| :--- | :--- | :--- |
+| **`manual` (默认推荐)** | **不自动清理，封存现场**。将实体 ID 与页面直达 URL 写入账本，等待人工登录核对，确认无误后通过指令一键清理 | 业务功能验收、UI 排版核对、回归测试复盘 |
+| **`on_success`** | 用例 passed 自动清理；用例 failed/blocked **强制锁定保留现场**，严禁删除 | 日常自动化流水线 |
+| **`auto`** | 无论结果直接清理（用户指令显式要求"自动清数"时触发） | 纯只读验证或无状态造数批跑 |
+
+**执行流程**：
+
+1. **失败现场绝对保护（Failure Scene Protection Guard，强制）**：
+   - 凡 `retain_on_failure: true`（默认生效）或当前用例状态为 **`failed` / `blocked`** 时，**无条件跳过物理清理，严防现场被破坏导致无法复现 Bug**；
+   - 现场信息写入 `evidence/$run_id/<case-id>/rollback_manifest.json`，并在 result.yaml 中标记：
+     `cleanup: { status: retained, reason: "用例失败，保留现场供人工复核排查" }`。
+
+2. **保留现场流程（manual 模式或触发失败保护时）**：
+   - 执行器**不执行 DELETE / destroy 操作**；
+   - 在证据目录完整记录保留的实体表名、主键 ID、页面直达 URL 以及对应的回滚命令；
+   - 追加写入 `evidence/$run_id/retained_scenes.json` 供全局回滚消费；
+   - 在 commands.log 及测试报告末尾以醒目警示框输出：
+     `📌 【测试现场已保留】表名: <table_name>, ID: <record_id>, 直达页面: <URL>。人工确认无误后，发送「确认清理」即可一键回收。`
+
+3. **立即清理流程（auto 模式，或用户下达「确认清理」指令时）**：
+   - **双轨自愈清理**：
+     1. 优先执行用例声明的 `data.cleanup` 脚本；
+     2. 若无显式 cleanup 或脚本失败，自动读取 `rollback_manifest.json` 兜底逆向清理（新建数据执行 `DELETE / destroy`；复用存量数据仅回滚变动字段，绝不物理整行删除）；
+   - 清理完成更新 result.yaml 为 `cleanup: { status: cleaned }`。
 
 ### e. 写 case 级 result.yaml（每条 case 结束立即写）
 
@@ -171,6 +256,8 @@ cleanup:              # cleanup 失败或执行中误创建并已清理时填
 | 陷阱 | 现象 | 对策 |
 |---|---|---|
 | HTTP 2xx ≠ 成功 | 错误响应也返回 200/201 | 断言以 response-body 为准，不看状态码（§1c 第 2 层） |
+| 空数据误判为 Pass | 页面查不出数据显示"暂无数据"，但因无报错判定通过，上线后崩溃 | 【反空数据铁律】：列表为空或字段为 `--`/`null`/`NaN` 一律判 FAIL，强制先造数补全数据 |
+| 缺乏多画像覆盖 | 只测了一条随机构造的数据，未覆盖临界和封顶 | 严格按照资深 QA 三画像（压门槛0分、首档超额、打满封顶）造数并分别断言 |
 | 异步未返回就断言 | 下拉"暂无数据"，稍后又出现了 | 先查 requests/response-body 再下结论 |
 | 两次结果不一致 | 同一步骤重跑结果不同 | 大概率前端异步竞态：换输入方式（一次性完整输入替代逐键输入）复测，区分竞态与后端行为 |
 | 组件状态残留 | 上一条 case 的选中项/表单值还在 | 每条 case 开始先导航到目标页重置状态，确认初始状态符合前置再操作 |
@@ -219,9 +306,9 @@ cleanup:              # cleanup 失败或执行中误创建并已清理时填
 
 | 状态 | 判定 |
 |---|---|
-| passed | 所有断言通过 |
-| failed | 任一断言未通过（UI 实际 ≠ 预期，或 DB 数据不符） |
-| blocked | 环境故障：登录失败、DB 连不上、服务 5xx/超时。**不算用例失败** |
+| passed | 所有断言通过，且**所有断言均验证到真实有效的非空业务数据与计算逻辑** |
+| failed | 任一断言未通过，或**断言处出现空数据/暂无数据/字段为--/NaN，未能验证到预期业务逻辑** |
+| blocked | 环境故障：登录失败、DB 连不上、服务 5xx/超时、**或 setup 造数失败导致数据缺失**。**不算用例失败** |
 | skipped | 用户指定跳过 |
 
 **环境故障处理**：连续 2 条 case 因同类环境原因 blocked → 停止派发。若当前 `ENV` 是 test 且 config 该环境配了 `k8s` 段，先加载 `qa-powers:k8s` 查后端日志 / pod 状态定位环境原因（结论记入 run 级 result.yaml；修复类操作按该 skill 规则需用户确认），排除后可恢复则继续 run；仍无法恢复 → 停止 run，剩余 case 全部标 blocked（reason 同），直接进入收尾。当前 `ENV` 是 local → 无 k8s，提示用户起本地服务/看本地日志定位。

@@ -1,6 +1,6 @@
 ---
 name: report
-description: 生成测试报告。读取 .qa-powers/evidence/<run-id>/result.yaml（机器契约），汇总四态统计与失败详情，输出 Markdown 报告。用户说"生成报告"、"看看测试结果"时使用。
+description: 资深 QA 视角的专业测试报告生成。读取 .qa-powers/evidence/<run-id>/result.yaml（机器契约），汇总四态统计、资深 QA 业务画像覆盖度（压门槛/超额/封顶）、数据真实性与非空校验审计以及失败深度归因，输出标准化 Markdown 报告。用户说"生成报告"、"看看测试结果"时使用。
 allowed-tools: Read, Write, Bash(ls:*), AskUserQuestion
 ---
 
@@ -41,6 +41,15 @@ allowed-tools: Read, Write, Bash(ls:*), AskUserQuestion
 | case-01 正常下单流程 | ✅ PASS | |
 
 case result.yaml 带 `account:` 时，用例名后附账号（如 `case-02 下单 [buyer]`）；多账号 run 建议在总览后加一节「账号覆盖」：每个账号跑了哪些 case、通过率。
+
+## 业务画像覆盖与数据真实性审计（资深 QA 黄金准则）
+
+汇总本次测试所覆盖的业务数据画像，并核验业务逻辑穿透度：
+- **画像 1（压门槛/0分临界画像）**：验证门槛扣减未漏扣，超额 0 分基线。
+- **画像 2（首档有效超额画像）**：验证超额奖励/得分精确匹配计算公式。
+- **画像 3（溢出打满封顶画像）**：验证系统防线截断，未无限膨胀，守护财务与业务底线。
+- **存量历史兼容画像**：验证历史分期/老单据不受新指标污染。
+- **【数据真实性与非空核验】**：所有 PASSED 用例均已穿透核实具体业务数值，未出现"暂无数据"或空值假阳性。
 
 ## 覆盖改动点与验证结论
 

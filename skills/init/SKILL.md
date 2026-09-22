@@ -86,7 +86,7 @@ browser:                 # 两环境共享
 repos:                   # 共享：本地 checkout
   frontend: { path: <收集值>, base: <探测的默认分支> }   # base 用第 1 节探测出的默认分支（main/master）
   backend:  { path: <收集值>, base: <探测的默认分支>, type: rails }   # 无后端则删除此行；type=rails|node|python|other（第 1 节探测写入）
-active_env: local        # 所选环境中的第一个（只选 test 时为 test）；run 开头可切换
+active_env: test         # 默认优先采用 test (dev) 测试联调环境，避免本地无服务阻塞；run 开头亦可切换
 envs:
   local:
     base_url: <收集值>
